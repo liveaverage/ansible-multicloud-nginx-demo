@@ -1,0 +1,122 @@
+---
+- name: Create Azure Resources
+  hosts: localhost
+  connection: local
+  vars:
+    prefix: nginx
+    owner: jrmorgan
+    a_rg: "rg_{{ owner }}"
+    state: "present"
+    vm_state: "present"
+  tasks:
+    - name: Create a resource group
+      azure_rm_resourcegroup:
+        name: "{{ a_rg }}"
+        location: eastus
+        tags:
+          owner: "{{ owner }}"
+          delete: never
+
+    - name: Create a virtual network
+      azure_rm_virtualnetwork:
+        resource_group: "{{ a_rg }}"
+        state: "{{ state }}"
+        name: "net_{{ prefix }}_azr_01"
+        address_prefixes_cidr:
+          - "10.1.0.0/16"
+        dns_servers:
+          - "127.0.0.1"
+          - "1.1.1.1"        
+        tags:
+          owner: "{{ owner }}"
+
+    - name: Create a virtual network subnet
+      azure_rm_subnet:
+        resource_group: "{{ a_rg }}"
+        state: "{{ state }}"
+        name: "sbt_{{ prefix }}_azr_01"
+        address_prefix: "10.1.0.0/24"
+        virtual_network: "net_{{ prefix }}_azr_01"
+
+    - name: Create public ip
+      azure_rm_publicipaddress:
+        resource_group: "{{ a_rg }}"
+        allocation_method: Static
+        name: "pip_{{ prefix }}_azr_01"
+      register: pip
+
+    - name:
+      debug:
+        var: pip
+
+    
+    - name: Create security group that allows SSH and TCP80
+      azure_rm_securitygroup:
+        resource_group: "{{ a_rg }}"
+        state: "{{ state }}"
+        name: "sgp_{{ prefix }}_azr_01"
+        rules:
+          - name: SSH
+            protocol: Tcp
+            destination_port_range: 22
+            access: Allow
+            priority: 101
+            direction: Inbound
+          - name: HTTP
+            protocol: Tcp
+            destination_port_range: 80
+            access: Allow
+            priority: 102
+            direction: Inbound
+
+    - name: Create NIC
+      azure_rm_networkinterface:
+        resource_group: "{{ a_rg }}"
+        state: "{{ state }}"
+        name: "nic_{{ prefix }}_azr_01"
+        virtual_network: "net_{{ prefix }}_azr_01"
+        subnet: "sbt_{{ prefix }}_azr_01"
+        public_ip_name: "pip_{{ prefix }}_azr_01"
+        security_group: "sgp_{{ prefix }}_azr_01"
+
+    - name: Create a VM
+      register: vm
+      azure_rm_virtualmachine:
+        resource_group: "{{ a_rg }}"
+        state: "{{ vm_state }}"
+        name: "azr-{{ prefix }}"
+        network_interfaces:
+          - "nic_{{ prefix }}_azr_01"
+        admin_username: cloud-user
+        admin_password: Password20192019
+        ssh_public_keys:
+          - path: /home/cloud-user/.ssh/authorized_keys
+            key_data: "{{ lookup('url', 'https://lab.int.shifti.us:10080/central/authorized_keys/raw/master/key-data.txt') }}"
+        vm_size: Basic_A1
+        image:
+          offer: RHEL
+          publisher: RedHat
+          sku: 7-RAW
+          version: latest
+        tags:
+          owner: "{{ owner }}"
+
+    - name:
+      debug:
+        var: vm
+
+    - name: Add Host to Tower Group
+      tower_host:
+        name: "azr-{{ prefix }}"
+        description: "Azure azr-{{ prefix }}"
+        inventory: "Multicloud-Inventory"
+        state: "{{ vm_state }}"
+        enabled: yes
+        tower_host: "https://tower.gxr.me:8443"
+        tower_password: "{{ vc_password }}" 
+        tower_verify_ssl: no  
+        variables:
+          ansible_host: "{{ pip.state.ip_address }}"       
+          ansible_user: cloud-user 
+      
+
